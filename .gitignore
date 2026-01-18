@@ -46,6 +46,17 @@ lerna-debug.log*
 .temp
 .tmp
 
+# Database and local test data
+mysql_data/
+127.0.0.1_13000/
+email-debug.js
+
+# PM2
+dump.rdb
+.pm2/
+pm2.log
+pm2-*.log
+
 # Runtime data
 pids
 *.pid

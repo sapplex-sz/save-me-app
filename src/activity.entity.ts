@@ -10,6 +10,12 @@ export class Activity {
   @Column()
   phoneNumber: string; // 用户的手机号 (V1 作为简易 ID，保留以防 User 为空)
 
+  @Column({ nullable: true })
+  userName: string; // 用户的昵称
+
+  @Column({ default: 'zh' })
+  language: string; // 用户偏好语言: zh, en
+
   @ManyToOne(() => User, (user) => user.activities, { nullable: true })
   user: User;
 

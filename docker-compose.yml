@@ -1,0 +1,21 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: save-me-mysql
+    restart: always
+    environment:
+      MYSQL_DATABASE: saveme_db
+      MYSQL_USER: saveme_db
+      MYSQL_PASSWORD: drKZLR8h7K7snzhD
+      MYSQL_ROOT_PASSWORD: drKZLR8h7K7snzhD
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./mysql_data:/var/lib/mysql
+
+  redis:
+    image: redis:latest
+    container_name: save-me-redis
+    restart: always
+    ports:
+      - "6379:6379"

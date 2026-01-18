@@ -21,26 +21,39 @@ export class ActivityConsumer extends WorkerHost {
   }
 
   async process(job: Job<any, any, string>): Promise<any> {
-    const { activityId } = job.data;
+    const { activityId, emailPreview } = job.data;
     this.logger.debug(`Checking timeout for activity: ${activityId}`);
 
-    const activity = await this.activityRepository.findOneBy({ id: activityId });
+    // 在日志中记录邮件预览内容，方便在 Bull Board 中单独查看
+    if (emailPreview) {
+      await job.log('--- 邮件预览 (待发送内容) ---');
+      await job.log(`主题: ${emailPreview.subject}`);
+      await job.log(`正文预览: ${emailPreview.body.substring(0, 500)}...`);
+      await job.log('---------------------------');
+    }
+
+    const activity = await this.activityRepository.findOne({
+      where: { id: activityId },
+    });
 
     if (!activity) {
-      this.logger.warn('Activity not found, skipping check.');
-      return;
+      const msg = `Activity ${activityId} not found, skipping.`;
+      await job.log(msg);
+      return { status: 'not_found', msg };
     }
 
     if (activity.status !== 'active') {
-      this.logger.debug(`Activity status is ${activity.status}, skipping alarm.`);
-      return;
+      const msg = `用户已安全 (状态: ${activity.status})，告警已取消发送。`;
+      this.logger.debug(msg);
+      await job.log(`✅ ${msg}`);
+      return { status: 'cancelled', reason: activity.status, email: emailPreview?.subject };
     }
 
     // 核心判定：现在时间 > Deadline 吗？
     const now = new Date();
     if (now > activity.nextCheckInDeadline) {
       // !!! 真的超时了 !!!
-      await this.triggerAlarm(activity);
+      return await this.triggerAlarm(activity, job);
     } else {
       this.logger.debug(
         `Safe. Now: ${now.toISOString()} < Deadline: ${activity.nextCheckInDeadline.toISOString()}`,
@@ -48,7 +61,7 @@ export class ActivityConsumer extends WorkerHost {
     }
   }
 
-  private async triggerAlarm(activity: Activity) {
+  private async triggerAlarm(activity: Activity, job: Job<any, any, string>) {
     // 1. 修改状态
     activity.status = 'alarmed';
     await this.activityRepository.save(activity);
@@ -93,14 +106,18 @@ export class ActivityConsumer extends WorkerHost {
         await this.emailService.sendAlert(
           activity.emergencyContactEmail,
           activity.activityName,
-          activity.phoneNumber, // userName (V1 use phone)
+          activity.userName || activity.phoneNumber, // userName (V1 use phone)
           activity.lastLatitude ? Number(activity.lastLatitude) : null,
           activity.lastLongitude ? Number(activity.lastLongitude) : null,
           activity.description || 'No description',
           activity.emergencyInstructions || '',
-          activity.updatedAt || activity.createdAt,
-          activity.secondaryContactEmail || ''
+          activity.nextCheckInDeadline, // 使用业务截止时间，让联系人知道用户从何时起失联
+          activity.secondaryContactEmail || '',
+          activity.language || 'zh',
         );
+        const msg = `🚨 告警邮件已成功发送至: ${activity.emergencyContactEmail}`;
+        await job.log(msg);
+        return { status: 'sent', recipient: activity.emergencyContactEmail };
       } catch (error) {
         this.logger.error(`Failed to send Email alert: ${error.message}`);
       }

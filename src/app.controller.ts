@@ -1,6 +1,6 @@
 import { Controller, Post, Get, Body, Param, Query } from '@nestjs/common';
 import { AppService } from './app.service';
-import { IsString, IsInt, Min, IsOptional, IsNumber, Max } from 'class-validator';
+import { IsString, IsInt, Min, IsOptional, IsNumber, Max, IsEmail } from 'class-validator';
 
 class CreateActivityDto {
   @IsString()
@@ -13,6 +13,14 @@ class CreateActivityDto {
   @IsOptional()
   description: string;
 
+  @IsString()
+  @IsOptional()
+  userName: string;
+
+  @IsString()
+  @IsOptional()
+  language: string; // zh or en
+
   @IsInt()
   @Min(1)
   intervalMinutes: number; // 报平安间隔
@@ -22,6 +30,7 @@ class CreateActivityDto {
 
   @IsString()
   @IsOptional()
+  @IsEmail({}, { message: '紧急联系人邮箱格式不正确' })
   contactEmail: string;
 
   @IsString()
@@ -30,6 +39,7 @@ class CreateActivityDto {
 
   @IsString()
   @IsOptional()
+  @IsEmail({}, { message: '备用联系人邮箱格式不正确' })
   secondaryContactEmail: string;
 
   @IsString()
@@ -39,6 +49,11 @@ class CreateActivityDto {
   @IsInt()
   @IsOptional()
   warningMinutes: number;
+
+  @IsInt()
+  @IsOptional()
+  @Min(0)
+  toleranceMinutes?: number;
 
   @IsNumber()
   @IsOptional()
@@ -84,6 +99,9 @@ export class AppController {
       body.secondaryContactPhone || '',
       body.secondaryContactEmail || '',
       body.emergencyInstructions || '',
+      body.toleranceMinutes,
+      body.userName || '匿名用户',
+      body.language || 'zh',
     );
   }
 

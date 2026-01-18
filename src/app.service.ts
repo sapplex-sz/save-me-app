@@ -31,7 +31,20 @@ export class AppService {
     secondaryContactPhone: string = '',
     secondaryContactEmail: string = '',
     emergencyInstructions: string = '',
+    toleranceMinutes?: number,
+    userName: string = '匿名用户',
+    language: string = 'zh',
   ) {
+    // 限制：同一个手机号 1 分钟内只能开启一次活动，防止恶意刷接口
+    const recentActivity = await this.activityRepository.findOne({
+      where: { phoneNumber },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (recentActivity && (new Date().getTime() - recentActivity.createdAt.getTime() < 60000)) {
+      throw new Error('操作过于频繁，请 1 分钟后再试');
+    }
+
     // 结束旧的活动
     const oldActivity = await this.activityRepository.findOne({
       where: { phoneNumber, status: 'active' },
@@ -43,6 +56,7 @@ export class AppService {
 
     const activity = new Activity();
     activity.phoneNumber = phoneNumber;
+    activity.userName = userName;
     activity.activityName = activityName;
     activity.description = description;
     activity.checkInIntervalMinutes = interval;
@@ -51,8 +65,9 @@ export class AppService {
     activity.secondaryContactPhone = secondaryContactPhone;
     activity.secondaryContactEmail = secondaryContactEmail;
     activity.emergencyInstructions = emergencyInstructions;
-    activity.toleranceMinutes = 5; // 恢复为5分钟 (生产环境建议值)
+    activity.toleranceMinutes = toleranceMinutes !== undefined ? toleranceMinutes : 0; // 测试期间默认设为0，方便快速验证
     activity.warningMinutes = warningMinutes;
+    activity.language = language;
     activity.status = 'active';
     activity.lastLatitude = lastLatitude;
     activity.lastLongitude = lastLongitude;
@@ -65,11 +80,32 @@ export class AppService {
     const savedActivity = await this.activityRepository.save(activity);
     this.logger.log(`Activity started: ${savedActivity.id}, Deadline: ${deadline.toISOString()}`);
 
+    // 生成邮件预览内容
+    const emailPreview = this.emailService.getAlertTemplate(
+      savedActivity.activityName,
+      savedActivity.userName || savedActivity.phoneNumber,
+      savedActivity.lastLatitude ? Number(savedActivity.lastLatitude) : null,
+      savedActivity.lastLongitude ? Number(savedActivity.lastLongitude) : null,
+      savedActivity.description || '',
+      savedActivity.emergencyInstructions || '',
+      savedActivity.createdAt,
+      savedActivity.language || 'zh'
+    );
+
     // 添加延时任务
     const delayMs = (interval + activity.toleranceMinutes) * 60 * 1000;
     await this.alarmQueue.add(
-      'check-timeout',
-      { activityId: savedActivity.id },
+      `📧 告警预览 | ${activity.userName || activity.phoneNumber} - ${activity.activityName}`,
+      { 
+        activityId: savedActivity.id,
+        activityName: savedActivity.activityName,
+        phoneNumber: savedActivity.phoneNumber,
+        deadline: deadline.toISOString(),
+        emailPreview: {
+          subject: emailPreview.subject,
+          body: emailPreview.html
+        }
+      },
       { delay: delayMs },
     );
 
@@ -115,12 +151,33 @@ export class AppService {
     await this.activityRepository.save(activity);
     this.logger.log(`Safe reported: ${activityId}, Loc: ${lat},${lng}, Bat: ${batteryLevel}%, New Deadline: ${nextDeadline.toISOString()}`);
 
-    // 添加新的延时任务
+    // 生成邮件预览内容
+    const emailPreview = this.emailService.getAlertTemplate(
+      activity.activityName,
+      activity.userName || activity.phoneNumber,
+      activity.lastLatitude ? Number(activity.lastLatitude) : null,
+      activity.lastLongitude ? Number(activity.lastLongitude) : null,
+      activity.description || '',
+      activity.emergencyInstructions || '',
+      activity.nextCheckInDeadline,
+      activity.language || 'zh'
+    );
+
+    // 添加延时任务
     const delayMs =
       (activity.checkInIntervalMinutes + activity.toleranceMinutes) * 60 * 1000;
     await this.alarmQueue.add(
-      'check-timeout',
-      { activityId: activity.id },
+      `📧 告警预览 | ${activity.userName || activity.phoneNumber} - ${activity.activityName}`,
+      { 
+        activityId: activity.id,
+        activityName: activity.activityName,
+        phoneNumber: activity.phoneNumber,
+        deadline: nextDeadline.toISOString(),
+        emailPreview: {
+          subject: emailPreview.subject,
+          body: emailPreview.html
+        }
+      },
       { delay: delayMs },
     );
 
@@ -163,23 +220,9 @@ export class AppService {
 
     if (email) {
       try {
-        const testSubject = '【救救我 App】连接性测试邮件';
-        const testHtml = `
-          <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 8px; max-width: 500px;">
-            <h2 style="color: #4caf50; margin-top: 0;">✅ 连接测试成功</h2>
-            <p>这是一封由“救救我”App 发出的自动测试邮件。</p>
-            <p><strong>测试时间：</strong>${new Date().toLocaleString()}</p>
-            <p>看到此邮件说明您的邮件通知功能已准备就绪。如果发生意外，系统将能准确地将求助信息发送至此邮箱。</p>
-            <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-            <p style="font-size: 12px; color: #999;">此邮件仅用于系统连接性测试，无需回复。</p>
-          </div>
-        `;
-        const sent = await this.emailService.sendEmail({
-          to: email,
-          subject: testSubject,
-          html: testHtml,
-        });
-        results.email = sent ? 'ok' : 'failed';
+        // 核心改动：仅验证 SMTP 配置连通性，不发送真实邮件
+        const isConfigValid = await this.emailService.verifyConfig();
+        results.email = isConfigValid ? 'ok' : 'failed';
       } catch (e) {
         results.email = 'failed';
       }
